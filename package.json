@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "build-help": "node src/build.js"
+  }
+}
