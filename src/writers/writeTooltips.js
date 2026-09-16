@@ -1,42 +1,21 @@
-const fs = require("fs");
-const path = require("path");
+const fs = require('fs');
 
-function writeTooltips(tooltips) {
-  if (
-    !tooltips ||
-    Object.keys(tooltips).length === 0
-  ) {
-    console.warn(
-      "[WARN] No tooltips found."
-    );
+const resolvePaths = require('../paths');
+
+function writeTooltips(tooltips, paths = resolvePaths()) {
+  if (!tooltips || Object.keys(tooltips).length === 0) {
+    console.warn('[WARN] No tooltips found.');
+
     return;
   }
 
-  const outputDir = path.join(
-    process.cwd(),
-    "help",
-    "fields"
-  );
-
-  // Create folder if needed
-  fs.mkdirSync(outputDir, {
+  fs.mkdirSync(paths.fieldsDir, {
     recursive: true
   });
 
-  const outputFile = path.join(
-    outputDir,
-    "tooltips.json"
-  );
+  fs.writeFileSync(paths.tooltipsFile, JSON.stringify(tooltips, null, 2), 'utf8');
 
-  fs.writeFileSync(
-    outputFile,
-    JSON.stringify(tooltips, null, 2),
-    "utf8"
-  );
-
-  console.log(
-    `[INFO] Tooltips written: ${outputFile}`
-  );
+  console.log(`[INFO] Tooltips written: ${paths.tooltipsFile}`);
 }
 
 module.exports = writeTooltips;

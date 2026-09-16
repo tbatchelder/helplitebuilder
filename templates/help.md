@@ -1,33 +1,37 @@
+// Build type for HelpLite. Only 'standard' exists today.
 @build(standard)
+
+// Stylesheet baked into the generated global help page. Required.
 @link(/styles/help.css)
 
-@tt(businessName)
-Legal name of the business.
+// Tooltip definitions -- one line each: name | text
+@tt
+businessName | Legal name of the business.
+ein | Federal Employer Identification Number.
+receiptAmount | Total purchase amount shown on the receipt.
+@ett
 
-@tt(ein)
-Federal Employer Identification Number.
-
-@tt(receiptAmount)
-Total purchase amount shown on the receipt.
-
-@pc(newbusiness)
-
-Create your business before adding documents,
-contacts, or receipts.
+// Page context help -- one panel per page: name | text, then any markdown
+// until the next name line or @epc.
+@pc
+newbusiness | Create your business before adding documents, contacts, or receipts.
 
 This information can be updated later.
 
+receipts | Receipts are used for bookkeeping, tax preparation and audit support.
+
+Use clear photographs whenever possible.
 @epc
+
+// Everything below is plain markdown and becomes the global help page.
 
 # New Business
 
-The New Business page is used to create and manage
-your business profile.
+The New Business page is used to create and manage your business profile.
 
 ## Business Information
 
-Enter the legal name of your business along with
-its entity type.
+Enter the legal name of your business along with its entity type.
 
 ## Tax Information
 
@@ -43,25 +47,10 @@ After creating a business profile you should:
 
 # Receipts
 
-@tt(receiptVendor)
-Business where the purchase was made.
-
-@tt(receiptDate)
-Date shown on the receipt.
-
-@pc(receipts)
-
-Receipts are used for bookkeeping,
-tax preparation and audit support.
-
-Use clear photographs whenever possible.
-
-@epc
-
 ## Uploading Receipts
 
-Take a clear photo of the receipt and verify the
-important details are visible.
+Take a clear photo of the receipt and verify the important details are
+visible.
 
 ## Categorizing Receipts
 
@@ -69,5 +58,5 @@ Assign appropriate categories so reports remain accurate.
 
 ## Reporting
 
-Categorized receipts will become available in
-financial reports and exports.
+Categorized receipts will become available in financial reports and
+exports.

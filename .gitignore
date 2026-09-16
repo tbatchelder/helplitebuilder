@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Test artifacts
+coverage/
+
+# Local dev scratch and its build output -- both regenerated, never source.
+# help-source/ is what a project's own `init` creates for a developer to
+# edit; help/ is what the builder writes from it. Neither belongs in this
+# repo's history, here or in a consumer's project.
+help-source/
+help/
+
+# Environment/secrets
+.env
+.env.local
+.env.*.local
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+*.log
+
+# Personal working notes -- not meant for the public repo
+docs/helplite builder.docx
