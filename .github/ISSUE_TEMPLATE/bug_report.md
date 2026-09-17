@@ -10,14 +10,16 @@ A clear description of the actual behavior.
 **What you expected**
 What you expected to happen instead.
 
+**help.md snippet**
+The smallest piece of your source file that reproduces the problem.
+
 **Steps to reproduce** 1. 2. 3.
 
 **Environment**
 
 - HelpLite Builder version:
-- Browser + version:
-- Bundler (Vite, webpack, none, etc.) if relevant:
-- Node version (if this is a build/setup issue):
+- Node version:
+- OS:
 
-**Console errors**
-Paste any errors from the browser console or terminal, if any.
+**Console output**
+Paste any errors or unexpected output from the terminal, if any.
