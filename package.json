@@ -8,6 +8,7 @@
     "build-help": "node src/build.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -15,7 +16,8 @@
     "marked": "^18.0.13"
   },
   "devDependencies": {
-    "prettier": "3.9.6",
+    "@vitest/coverage-v8": "^5.0.1",
+    "prettier": "^3.9.6",
     "vitest": "^5.0.1"
   }
 }

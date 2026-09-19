@@ -117,6 +117,52 @@ is the _why_ behind specific choices, including real bugs found and
 how they were fixed — worth searching before re-deciding something
 that's already been through this once.
 
+## Adding a build type
+
+> **Note:** the rest of this document is still carried over from
+> PrefKeeper (this project's sibling) and describes that project's
+> workflow, not this one's. It hasn't had its own pass yet. This
+> section is accurate for HelpLite Builder specifically; treat
+> everything else here with suspicion until the full rewrite happens.
+
+`@build(type)` in a `help.md` source file selects which layout the
+global help page is generated with. Every valid type is a file in
+`src/builders/` and one entry in `src/builders/index.js` (the
+registry) — there is deliberately no way for an end user to register
+their own build type from outside this repo. If you need a layout this
+project doesn't have yet, that's a PR here, not a config option,
+because a new layout can require more than new HTML (a sidebar build
+needs page order and titles for its nav, for example) — that may mean
+changes to the parser or the parsed data shape, not just a new
+template.
+
+If your PR adds or changes a build type, all of the following are
+required, not optional:
+
+- A file in `src/builders/` exporting a function matching the contract
+  documented at the top of `src/builders/standard.js` (receives
+  already-rendered, already-escaped `{ title, body, cssPath }`, returns
+  a complete HTML document string, touches no filesystem).
+- One line added to `src/builders/index.js`. You do **not** need to
+  touch `src/validation/validateBuild.js` — its allowlist is derived
+  from the registry automatically, so a type that exists in the
+  registry is automatically valid, and one that doesn't isn't.
+- `test/builders/registry.test.js` will start running its generic
+  baseline checks against your new type automatically — no changes
+  needed there. That test is a floor, not a substitute: also add a
+  `test/builders/<type>.test.js` asserting on whatever is actually
+  specific to your layout (nav markup, page ordering, whatever the
+  point of the new type is).
+- If the new type needs something the parser doesn't currently produce
+  (page titles, page order, anything beyond markdown/tooltips/page
+  context), that's a `src/parse.js` change with its own tests in
+  `test/parse.test.js`, reviewed with the same scrutiny as the parser
+  itself.
+
+A PR that adds a build type without its own tests will be rejected —
+the registry contract test proves the new type doesn't crash, it
+doesn't prove it does the right thing.
+
 ## Pull requests
 
 See the PR template for the checklist. In short: tests pass, code is

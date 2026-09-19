@@ -1,14 +1,18 @@
-function validateLink(cssPath, lineCount) {
-  if (!cssPath.trim()) {
-    console.error(`[ERROR] Empty CSS path at line '${lineCount + 1}'.`);
+const HelpBuildError = require('../errors');
 
-    process.exit(1);
+function validateLink(cssPath, lineCount) {
+  if (cssPath === null) {
+    return;
+  }
+
+  if (!cssPath.trim()) {
+    throw new HelpBuildError(`Empty CSS path at line '${lineCount + 1}'.`);
   }
 
   if (!/\.css($|\?)/.test(cssPath)) {
-    console.error(`[ERROR] CSS path '${cssPath}' must end with '.css' at line '${lineCount + 1}'.`);
-
-    process.exit(1);
+    throw new HelpBuildError(
+      `CSS path '${cssPath}' must end with '.css' at line '${lineCount + 1}'.`
+    );
   }
 }
 

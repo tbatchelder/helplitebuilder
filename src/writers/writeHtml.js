@@ -2,39 +2,26 @@ const fs = require('fs');
 
 const resolvePaths = require('../paths');
 const renderMarkdown = require('../markdown');
+const { escapeHtml, findTitle } = require('../html');
+const builders = require('../builders');
+const HelpBuildError = require('../errors');
 
-// The CSS path and the title are dropped into HTML attributes and an element,
-// so they have to be escaped. cssPath is validated for a .css ending, not for
-// quote characters -- a path containing one would otherwise close the
-// attribute early and emit broken markup.
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-// Use the first level-1 heading as the document title. The author already
-// wrote it; asking for it a second time via a directive would be one more
-// thing to keep in sync. Falls back to "Help" when there is no h1.
-function findTitle(markdownLines) {
-  for (const line of markdownLines) {
-    const match = line.match(/^#\s+(.+)$/);
-
-    if (match) {
-      return match[1].trim();
-    }
-  }
-
-  return 'Help';
-}
-
-function writeHtml(markdownLines, cssPath, paths = resolvePaths()) {
+function writeHtml(markdownLines, cssPath, buildType = 'standard', paths = resolvePaths()) {
   if (!markdownLines || markdownLines.length === 0) {
     console.warn('[WARN] No markdown content found.');
 
     return;
+  }
+
+  const builder = builders[buildType];
+
+  // Defensive, not reachable through the normal CLI flow -- validateBuild
+  // already rejects an unknown build type while parsing, before writeHtml
+  // is ever called with it. This only matters if writeHtml is called
+  // directly (as its own unit tests do) with a buildType validateBuild
+  // never saw.
+  if (!builder) {
+    throw new HelpBuildError(`No builder registered for build type '${buildType}'.`);
   }
 
   const markdown = markdownLines.join('\n');
@@ -43,21 +30,13 @@ function writeHtml(markdownLines, cssPath, paths = resolvePaths()) {
 
   const title = escapeHtml(findTitle(markdownLines));
 
-  const stylesheet = cssPath ? `\n<link rel="stylesheet" href="${escapeHtml(cssPath)}">` : '';
+  const escapedCssPath = cssPath ? escapeHtml(cssPath) : null;
 
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title}</title>${stylesheet}
-</head>
-<body>
-
-${body}
-</body>
-</html>
-`;
+  // Every builder gets already-rendered, already-escaped pieces and hands
+  // back a complete document string -- it never touches fs. Writing the
+  // file is this function's job, the same as it is for tooltips and page
+  // context, regardless of which builder produced the string.
+  const html = builder({ title, body, cssPath: escapedCssPath });
 
   // The other two writers happen to create this folder as a side effect of
   // creating their own subfolders, so this only failed when a help file had

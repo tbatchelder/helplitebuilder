@@ -1,3 +1,5 @@
+const HelpBuildError = require('../errors');
+
 function validateTooltips(tooltips, definedAt = {}) {
   for (const [name, text] of Object.entries(tooltips)) {
     const lineNumber = definedAt[name];
@@ -5,15 +7,11 @@ function validateTooltips(tooltips, definedAt = {}) {
     const where = lineNumber ? ` at line '${lineNumber}'` : '';
 
     if (!name.trim()) {
-      console.error(`[ERROR] Tooltip name missing${where}.`);
-
-      process.exit(1);
+      throw new HelpBuildError(`Tooltip name missing${where}.`);
     }
 
     if (!text.trim()) {
-      console.error(`[ERROR] Tooltip '${name}' has no text${where}.`);
-
-      process.exit(1);
+      throw new HelpBuildError(`Tooltip '${name}' has no text${where}.`);
     }
   }
 }
