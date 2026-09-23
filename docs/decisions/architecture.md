@@ -1,4 +1,4 @@
-# PrefKeeper — Architecture Decisions
+# HelpLite Builder — Architecture Decisions
 
 A running log of decisions made during design/development, and why.
 Add new entries at the bottom as decisions get made or revisited.
@@ -10,327 +10,315 @@ in-scope/out-of-scope boundary has moved to [`../SCOPE.md`](../SCOPE.md).
 
 ## Core architecture
 
-- **Storage adapter pattern.** All reads/writes go through a generic
-  interface (`get()`, `set()`, `clear()`, `getSettings()`,
-  `setSettings()`, plus the pure `exportState()`/`importState()`
-  helpers) defined once in `src/storage/index.js`.
-  `localStorageAdapter.js` is the only real implementation today;
-  `extensionAdapter.js` is a stub throwing "not implemented" — the seam
-  for the future browser extension to swap in without touching
-  `engine.js` or `panel.js`.
-- **Preferences and settings are separate storage keys.**
-  `prefkeeper-preferences` holds the four editable categories (colors/
-  text/motion/focus). `prefkeeper-settings` holds app config
-  (`autoLoadPaused`) — conceptually different data with a different
-  lifecycle, not user-editable preference values.
-- **One JSON blob per category set, not per-field storage.** All
-  preferences live in a single saved object. This is why the dirty-state
-  UI is shared across tabs (see below) rather than four independent
-  states.
-- **CSS custom property convention: `--pk-*` namespace.** PrefKeeper
-  never touches a developer's existing `:root` variables. Developers
-  opt in by referencing PrefKeeper's namespaced variables in their own
-  CSS. See [`naming.md`](./naming.md) for why `--pk-` over the
-  originally-planned `--a11y-`.
-- **Zero runtime dependencies.** Icons are inline SVG, not a CDN icon
-  font or JS library. The bundled font ships inside the package itself,
-  not loaded from a CDN. Both choices avoid CSP breakage, offline
-  failure, and network dependency for something meant to be a
-  lightweight drop-in.
+- **Separate package from HelpLite, not a mode inside it.** HelpLite
+  Builder compiles `help-source/help.md` into the files HelpLite
+  consumes; it never runs in the browser and never ships to an end
+  user, only its generated output does. This is deliberate, not
+  incidental — every feature that could be tempting to bolt onto
+  HelpLite's runtime (navigation generation, search indexing,
+  sanitization) instead lives here, at build time, in a tool nobody
+  downloads. Complexity at build time is free; complexity at runtime
+  is downloaded by every visitor forever.
+- **An in-project build tool, not a standalone CLI or a runtime
+  compiler.** A developer wires `helplite-builder build` into their
+  own `npm run build` so help regenerates automatically on every
+  build, the same way any other asset-generation step would. Runtime
+  compilation (parsing `help.md` inside the running app) was ruled out
+  early — it would mean shipping the parser itself to every visitor,
+  exactly the "lite" HelpLite is supposed to stay.
+- **V1 syntax: markdown plus four directives.** `@build(type)` at the
+  top of the file, `@link(path.css)`, a `@tt` … `@ett` tooltip block,
+  and a `@pc` … `@epc` page-context block. See
+  [`naming.md`](./naming.md) for why the directives themselves are
+  kept to 3 characters or less, and why the block-with-pipes form
+  replaced an earlier per-item form.
+- **Tooltips are deliberately one line each.** This is "lite" help —
+  a short answer to "what is this field," not full custom
+  documentation per field.
+- **Output structure:** `help/help.html` (global), `help/pages/
+<name>.html` (per-page context), `help/fields/tooltips.json` (every
+  tooltip, names required to be unique site-wide since HelpLite looks
+  them up by name alone). Both the global help page and page-context
+  panels render to real HTML via `marked` rather than shipping raw
+  markdown text, so HelpLite only ever has to load and display,
+  never parse.
+- **Search stays a HelpLite runtime responsibility.** A generated
+  search index was considered for this package and explicitly
+  deferred — it's a HelpLite concern, not a build-time one, since
+  search needs to operate over whatever's currently loaded, not a
+  static snapshot.
 
-## UI architecture: engine + components
+## The parser: from a naive line-by-line pass to something fence-aware
 
-`panel.js` is the state/wiring "engine" — it owns `state`, dirty-state
-tracking, and every event listener. It does not contain the actual
-HTML/UI templates for the Colors/Text/Motion/Focus tabs or the
-Import/Export/Help/Settings screens; those live as small template
-functions in `src/ui/components/`, one file per screen, each exporting
-a `buildXScreen()` function that returns an HTML string. This keeps
-`panel.js` from becoming an ever-growing wall of inline template
-literals as more screens/presets get added.
+The original parser trimmed every line before doing anything else,
+which served directive/comment detection well (matching `@tt` with or
+without stray whitespace) but destroyed markdown block structure in
+the process — a nested list flattened to siblings, an indented code
+block lost its indentation entirely, and a `//` comment or a bare
+`@tt` typed inside a fenced code sample got misread as a real
+directive because the parser had no concept of "currently inside a
+fence" at all.
 
-`src/utils/dom.js` holds only genuinely generic, content-agnostic DOM
-helpers (currently just `el()`, which parses an HTML string into a
-real detached element) — it is deliberately NOT a dumping ground for
-actual UI screens.
+The fix split detection from storage: **detect on a normalized copy of
+each line, store the raw line.** A second piece of state — whether the
+parser is currently inside a fenced code block, and which fence
+character opened it — means nothing inside a fence is ever
+reinterpreted as markdown syntax, and a `~~~` fence can safely contain
+a ` ``` ` without prematurely closing. Directives and comments were
+additionally restricted to column zero, which for free also protects
+a four-space-indented code block (which has no fence to detect it by)
+from having its own `//` comment misread.
 
-## Hamburger menu: full overlay, not disable/hide
+An unterminated block — a missing `@ett`, `@epc`, or closing fence —
+now throws instead of silently swallowing the rest of the file into
+the wrong parsing mode, which previously could produce an empty
+`help.html` with no warning at all.
 
-Import, Export, Help, and Settings render as a single overlay screen
-that covers the **entire app, tabs included** — not just the
-Preview/Controls area (an earlier plan). Reaching one of these screens
-hides everything else behind it; a "← Back" button returns to normal
-tab view without touching any tab's underlying state at all (nothing
-was ever removed or changed, so there's nothing to restore).
+## Testability: `parse.js` split out as a pure function
 
-This was chosen over disabling or hiding the tabs/Save/Reset/View-
-Default buttons individually while a hamburger screen is open. That
-approach would need real state tracking across seven separate controls
-to get right, and a half-disabled background is exactly the kind of
-thing that trips up keyboard/screen-reader users — a bad look for an
-accessibility tool specifically. A full overlay makes the bad state
-impossible to reach at all, rather than requiring careful prevention
-every time.
+`build.js` originally did everything — read the file, parse it,
+validate it, write output — as code running at module scope the
+moment the file was `require`d, with every validator calling
+`process.exit(1)` directly on bad input. Neither is testable:
+importing the module _was_ running a real build against whatever was
+in `process.cwd()`, and a failing-input test would take the whole test
+runner down with it instead of letting anything assert on the error.
 
-The backdrop (behind the whole app, dimming the host page) is
-deliberately **not** wired to close anything on click — only the X
-button closes the app, with its unsaved-changes check intact. An
-accidental click just outside the panel while mid-edit should never be
-able to silently discard someone's changes.
+`src/parse.js` now holds the entire parsing loop as a pure function —
+markdown text in, a parsed structure out, or a thrown `HelpBuildError`
+— touching no filesystem and no `process` at all. `build.js` shrank to
+what it should always have been: read the file, hand the text to the
+parser, write what comes back, exported as `buildHelp({ sourceFile,
+outputDir })` rather than a side-effecting script. The CLI's
+`console.error`/`process.exit` behavior lives behind `if
+(require.main === module)`, so requiring the module never triggers it
+— verified directly, not just assumed, by requiring the module fresh
+in a throwaway process and confirming no `help/` directory appeared.
 
-## Save / Reset / View Site Default / Clear All — four distinct actions
+All four validators throw `HelpBuildError` instead of calling
+`process.exit` directly, for the same reason. `HelpBuildError` exists
+as one distinct class specifically so every CLI entry point (there are
+now two — `build` and `init`) can tell "print this message and exit 1"
+apart from "this is a real bug or filesystem problem, let it propagate
+with its stack trace." A missing source file, for instance,
+deliberately surfaces as a plain `ENOENT`, not a `HelpBuildError` —
+swallowing an unexpected failure into a tidy one-line message would
+hide exactly the information needed to diagnose it.
 
-- **Save** — writes current working values to storage. Does not touch
-  the live website. The only fully deliberate, explicit "commit" action.
-- **Reset [Category]** — reverts the _active tab's_ working values back
-  to defaults. Does not save, does not touch the live site. Counts as
-  an unsaved (dirty) state, same as any other edit.
-- **View Site Default** (footer toggle) — a temporary, non-destructive,
-  view-only flip of the panel's own internal preview between "my
-  preferences" and "the site's original look." Never touches storage or
-  the real host page at all; resets itself automatically on refresh
-  since nothing was ever persisted.
-- **Clear All Saved Preferences** (hamburger, confirm-gated) — the
-  actual destructive action. Wipes storage entirely, resets every tab
-  to defaults. Counts as immediately persisted, not a pending change.
-  Does NOT touch the real host page yet — like Save, that only happens
-  at Close.
+`src/init.js` was built the way `build.js` should have been from day
+one: a real, parameterized `initHelp({ targetDir, force })` from the
+start, no retrofit required.
 
-## Dirty-state model
+## Shared path resolution
 
-A `Set` of dirty categories (`colors`, `text`, `motion`, `focus`) drives
-one shared status message rendered identically across all four tabs'
-status blocks — e.g. "Color and Motion changes not saved" — rather than
-four independent per-tab states. The initial paint explicitly syncs
-this to "Saved" on mount (a fresh load with nothing edited should never
-show a false "unsaved changes" warning, which the template's hardcoded
-placeholder text did before this was caught in testing).
+`src/paths.js` exports one `resolvePaths(root)` function that every
+writer and both CLI entry points resolve output paths through.
+Previously each writer called `path.join(process.cwd(), 'help', ...)`
+independently — the output location was defined in three places, and
+that's also specifically what made the writers impossible to point at
+a temp directory in a test.
 
-## Close behavior, and the ONLY two places the real host page is touched
+## Writers: three real bugs found by actually running the code
 
-Clicking Close checks the dirty-category set:
+- **`writeHtml` never created its own output directory.** It only
+  appeared to work because `writeTooltips` happened to run first and
+  created `help/` as a side effect of creating `help/fields/`. A
+  source file with no tooltips and no page contexts crashed with an
+  uncaught `ENOENT`, entirely dependent on writer call order. Each
+  writer now creates what it needs.
+- **`writePageContext` never removed stale output.** Renaming a page
+  context from `contacts` to `oldcontacts` left `contacts.html`
+  sitting in the output folder forever — generated, but no longer
+  matching anything in the source, and HelpLite would have no way to
+  know it was dead. The writer now deletes any `.html` file under
+  `help/pages/` that wasn't written in the current run, deliberately
+  scoped to just that folder and just that extension so nothing a
+  developer placed there by hand (an image, a `.gitkeep`) is ever
+  touched.
+- **`cssPath` and the page title were interpolated into the generated
+  HTML unescaped.** A css path containing a `"` closed the `href`
+  attribute early and produced broken markup. Both are now escaped via
+  a shared `escapeHtml()` before reaching any template.
 
-- If dirty: shows a confirm dialog worded as **"You have unsaved
-  changes. [Cancel] [Save and Close]"** — deliberately avoiding
-  ambiguous Yes/No phrasing.
-- If not dirty: closes immediately.
+`marked` does not add `id` attributes to headings by default (checked
+directly against the installed version, not assumed from memory) —
+`src/markdown.js` adds a custom heading renderer that slugifies each
+heading into an id, with duplicate headings numbered (`overview`,
+`overview-1`) since several pages can legitimately share a heading
+like "Overview." This exists because every planned V2/V3 navigation
+feature — a table of contents, an in-app deep link, a "back to top" —
+needs something to target, and retrofitting ids after the fact would
+mean revisiting every existing output.
 
-**Only Close, and the initial mount, ever apply state to the real host
-page** (`document.documentElement`) — both gated on `autoLoadPaused`
-(see Settings/Pause below). Slider/preset/import changes only ever
-affect the internal preview elements, never the live site directly,
-until one of those two moments.
+## `@build(type)`: a registry, not a plugin API
 
-## Settings and Pause (shared boolean)
+`@build(type)` selects which layout the global help page is generated
+with. The implementation is a registry — `src/builders/`, one file per
+type, `src/builders/index.js` as the single lookup table — rather than
+a runtime API letting an end user register their own build type from
+outside this repo.
 
-The Settings screen's "Auto-load my preferences on every page" checkbox
-and the hamburger's "Pause Auto-Load" shortcut read/write the **same**
-persisted value (`autoLoadPaused`, in `prefkeeper-settings`). Pause
-exists as a one-tap shortcut to the same setting, for showing the site
-to someone else without preferences applied, without navigating into
-Settings first.
+This was a deliberate choice, not an oversight. A `@build()` value
+typed into someone's `help.md` is untrusted input from the builder's
+point of view. A new layout can require more than new HTML — a
+sidebar build needs page order and titles for its own navigation,
+which may not even exist yet in the parsed data shape — so adding one
+can mean a `src/parse.js` change, not just a new template. That's a
+much bigger contract to hand to an arbitrary string in a source file
+than "pick one of these known, reviewed layouts." A real plugin API
+was considered and explicitly deferred until a second real build type
+(`sidebar`) exists to design the contract against — designing a
+plugin signature now, before there's a concrete second consumer to
+test it against, would be guessing at a shape that `sidebar` might
+immediately prove wrong.
 
-When paused, both the initial mount-time apply and Close's apply are
-skipped — Close shouldn't quietly reapply preferences mid-demo just
-because someone happened to close the panel while paused, which would
-defeat the entire point of pausing.
+`src/validation/validateBuild.js`'s allowlist is derived from
+`Object.keys(builders)` rather than hand-maintained, so the parser's
+accepted `@build()` values and the builders that actually exist in the
+registry can never drift apart — there's exactly one list, not two
+that have to be kept in sync by hand.
 
-Without the browser extension, this only meaningfully controls
-same-origin auto-apply-on-load. True cross-tab/cross-device pause
-behavior depends on the extension existing (see the extension design
-notes) — a known, accepted v1 limitation, not an oversight.
+**Builder contract:** a builder function receives already-rendered,
+already-escaped `{ title, body, cssPath }` and returns a complete HTML
+document string, touching no filesystem itself. Rendering markdown and
+escaping the title/css path were pulled into shared modules
+(`src/html.js`, `src/markdown.js`) specifically so no individual
+builder ever has to think about escaping or rendering — it only
+arranges already-safe pieces into a shell. `writeHtml` owns looking up
+the right builder and all the actual `fs` work, the same as it does
+for tooltips and page context.
 
-## Import / Export
+**File vs. folder.** A builder can be a single file (`standard.js`
+today) or grow into a folder (`src/builders/hamburger/` with its own
+`index.js`, a real static `.js` asset, and a throwaway `demo.html` for
+manual browser testing) — deliberately not decided in advance for
+every future type. `require('./builders/x')` in Node resolves
+identically whether `x` is a file or a folder with an `index.js`, so
+nothing else in the codebase has to change the day a builder actually
+needs to be more than one file. Forcing folder structure on every
+builder today, before a second one exists to say what it needs, would
+be the same premature-structure mistake as designing the plugin API
+too early.
 
-- **Import** loads parsed data into the working `state` object and
-  marks all four categories dirty — the same "not saved until you hit
-  Save" discipline as any other edit, no separate save path. If there
-  are already unsaved changes, it warns and asks for confirmation
-  before overwriting, via the same confirm pathway as Close.
-- Validation reuses `storage.importState()` — the same shape-validation
-  every path into storage goes through, not a separate ad hoc parser.
-  Invalid JSON shows an inline error in the Import screen rather than a
-  disruptive `alert()`.
-- **Export** provides both a "Copy All" button (clipboard) and a real
-  file download (Blob + temporary `<a download>`), no confirmation
-  popup after either — the browser's own download indicator already
-  covers that.
-- **Security note (verified, not just assumed):** JSON.parse is not
-  vulnerable to prototype pollution via a `"__proto__"` key — this is
-  spec-defined behavior (JSON.parse builds objects via
-  CreateDataProperty, not normal assignment, so a `"__proto__"` key in
-  parsed JSON becomes an ordinary own property, never the real
-  prototype). Verified empirically, not just asserted. Independently,
-  PrefKeeper's own Import handler only ever reads four specific named
-  properties from the parsed object (`colors`/`text`/`motion`/`focus`)
-  — never a generic merge — so even in a hypothetical unsafe-JSON.parse
-  world, nothing in this codebase would be exposed. Worth revisiting if
-  a future feature ever does a _recursive/deep_ merge of imported data
-  (the real historical source of prototype-pollution CVEs, e.g. older
-  `lodash.merge`/`$.extend(true, ...)`), which nothing here does today.
+**How a builder brings in its own JS**, once one actually needs it: not
+a new `@script()` directive. Unlike CSS — which a consumer supplies
+via `@link`, a genuine external reference the builder never touches —
+a build type's interactive behavior isn't something a consumer picks;
+it's intrinsic to choosing that `@build(type)` in the first place. The
+plan is to `fs.readFileSync` a real, standalone `.js` file (the same
+file a developer opens directly in a browser via a throwaway
+`demo.html` and `<script src="...">` to manually click-test) and inline
+its contents into the generated page's `<script>` block at build
+time — proven working end to end with a throwaway demo, byte-for-byte
+identical output whether loaded via `<script src>` or inlined via
+`readFileSync`, so there's exactly one authored copy of the logic and
+no copy-paste drift between the tested version and the shipped one.
 
-## Custom presets (public extension point)
+**Verified, not assumed:** a raw `<script>` tag placed directly inside
+an author's `help.md` markdown content passes through `marked`
+completely unescaped and would execute in a browser. This is unrelated
+to the builder-JS mechanism above — it's just a real, checked fact
+about the current pipeline (no sanitization exists anywhere in it).
+Not treated as a bug: `help-source/help.md` is authored by a trusted
+developer, not end-user input, the same way nobody sanitizes a
+developer's own JS or CSS source files either.
 
-`initPrefKeeper({ customPresets: { contrast: {...}, colorVision: {...} } })`
-merges caller-supplied presets with the built-in defaults from
-`src/presets/`. A custom key matching a built-in name overrides it; any
-other key is added alongside. This is what lets a company (or any
-developer) layer in their own private preset — never published in this
-open-source package, never requiring a fork — and have it show up as a
-real, labeled, selectable dropdown option, generated from the preset's
-own `label` field rather than hardcoded HTML.
+## The registry contract test
 
-## Save as Theme / My Themes (user-saveable themes)
+`test/builders/registry.test.js` is a structural safety net under the
+"you must add tests" rule below, rather than relying purely on a
+reviewer remembering to check. It loops over `Object.keys(builders)`
+— today just `standard`, automatically including whatever gets added
+later — and holds every registered type to a generic baseline: doesn't
+throw, returns a valid HTML document, includes the given title/body/
+css path, is present in `validateBuild`'s allowlist. Explicitly a
+floor, not a substitute: it proves a new builder doesn't crash, not
+that it's correct. A PR adding a real build type still needs its own
+type-specific test file (see the "Adding a build type" section of
+`CONTRIBUTING.md`).
 
-Distinct from `customPresets` above, and worth being precise about the
-difference: `customPresets` is a _developer_-configured option, set in
-code, the same for every visitor. A saved theme is created by an
-_individual visitor_, for themselves, stored only on their own device
-— zero configuration needed from the developer at all.
+## The CLI: `init` and `build`
 
-**The initial design idea (checking for a saved theme first, before
-falling back to normal auto-load) was deliberately rejected** in favor
-of a simpler model. A second, competing auto-load source with an
-implicit priority order between it and the regular saved-preferences
-flow is exactly the shape of bug this project has spent real effort
-hunting down elsewhere (the font-path guessing, the missing
-`panel.css`) — something silently decided by invisible state that
-isn't visible just by looking at the code.
+`bin/helplite-builder.js` is the single CLI entry point, dispatching
+`init` and `build`, guarded the same way `build.js`'s own entry is
+(`require.main === module`) so requiring the file never runs anything.
 
-**What got built instead: a theme behaves exactly like a preset.**
-Picking a saved theme loads it into the _working_ state and marks all
-four categories dirty — identical to Import, and to picking a
-preset from a dropdown — using the exact same, already-correct
-Save/Close/auto-load mechanism, completely unchanged. No new priority
-logic anywhere. This also directly solves the original motivating
-scenario (showing a friend the site without losing your own setup):
-save your current setup as a theme _first_, let anything happen during
-the demo — Save, Reset, whatever — and recovering is just reselecting
-your theme and hitting Save again.
+`build` deliberately passes no arguments to `buildHelp()`, relying
+entirely on its existing defaults (`help-source/help.md` and `help/`,
+both relative to `process.cwd()`) — correct specifically because when
+this runs as part of a consumer's own `npm run build`,
+`process.cwd()` _is_ their project root. This was proven for real, not
+just reasoned about: packed via `npm pack`, installed fresh into a
+separate test project, and chained as `"build": "helplite-builder
+build && tsup"` into an actual copy of PrefKeeper's real, more complex
+build pipeline (`prepublishOnly`, `postbuild`, everything) — confirmed
+the help files generate correctly and PrefKeeper's own build runs
+immediately after, completely undisturbed.
 
-- **Storage:** a third, separate `prefkeeper-custom-themes` key (see
-  the storage layer section above), holding `{ name: state }`. Reuses
-  `isValidState()` entirely — a theme is exactly a preferences state,
-  just kept under a name.
-- **Save as Theme** lives in the footer, between Save and Reset —
-  deliberately independent of the regular Save/dirty-state flow. It
-  never marks the active preferences as saved and never affects the
-  Saved/unsaved status text; it's an additive action, saving a named
-  snapshot elsewhere. Verified with a real test, not just assumed.
-- **My Themes** (hamburger menu) lists saved themes; applying one
-  warns first if there are unsaved changes (same confirm pathway as
-  Import/Close), same reasoning as everywhere else this pattern is
-  used. Deleting a theme is confirm-gated, same as Clear All.
-- **Theme sharing was explicitly considered and deferred**, not an
-  oversight — themes are per-visitor, per-device by design for now.
-  Worth revisiting once the project has more real users actually
-  asking for it (see `ROADMAP.md`).
+`init` refuses to overwrite an existing `help-source/help.md` unless
+run with `--force`, and copies `templates/help.md` — read via
+`__dirname`-relative path resolution, which correctly resolves inside
+a consumer's own `node_modules/helplite-builder/` once installed as a
+real dependency, the same way it resolves during local development.
 
-### A real bug found (and fixed) during this feature's testing
+## Packaging: the `files` allowlist
 
-Setting text color to white made the hamburger overlay screens (and,
-it turned out, tab labels and footer text too) unreadable — white text
-on `.pk-app`'s white background. The narrow fix (`.pk-overlay-body p`)
-would have only patched the one element that happened to be noticed;
-the actual bug was that **`.pk-app` itself never had its own `color`
-property** — `color` is inherited by default, so anything inside
-`.pk-app` without a _more specific_ override was inheriting straight
-through from wherever `--pk-text` gets applied on the real host page.
+Discovered by actually installing the real published tarball into a
+fresh project, not by inspection: without a `files` field in
+`package.json`, `npm pack` included everything not gitignored — 46
+files, including the entire `test/` folder, `docs/`, `.github/`,
+`CONTRIBUTING.md`, and even `package-lock.json`, which ended up sitting
+uselessly inside a consumer's `node_modules/helplite-builder/`. Adding
+`"files": ["bin", "src", "templates"]` trimmed this to 21 files and
+11.4kB — reverified end to end afterward (fresh install, `init`,
+`build`) to confirm nothing that actually needs to ship was
+accidentally excluded. `LICENSE.md` and `README.md` ship regardless of
+this field; that's `npm`'s own behavior, not something declared here.
 
-Fixed with one line — `color: #222222` directly on `.pk-app` — which
-correctly protects every part of the chrome that didn't already have
-its own override, while `.pk-preview`'s existing, more specific
-`color: var(--pk-text, ...)` rule (higher specificity always wins)
-continues to correctly show the live color choice, completely
-unaffected. One root-cause fix instead of patching each symptom as
-it's separately discovered.
+## `help-source/` and `help/`: gitignored, everywhere
 
-## Typography
-
-- **Atkinson Hyperlegible Next** — see [`naming.md`](./naming.md) for
-  why this specific family. All 14 weight/style combinations are
-  bundled (~380KB total) so a developer adopting it as their site's
-  whole type system has the full range, not just what PrefKeeper's own
-  chrome happens to use.
-- Bundled inside the package itself (`src/assets/fonts/`, copied to a
-  top-level `assets/` folder at build time, sibling to `dist/`) — no
-  CDN dependency. `fonts.js` resolves the font file URLs at runtime via
-  `document.currentScript.src` (for plain `<script>` tag / IIFE usage)
-  falling back to `import.meta.url` (for real ESM bundler consumption).
-  This was arrived at after discovering esbuild does NOT natively
-  support the `new URL(path, import.meta.url)` asset-copying pattern
-  the way Vite does — that's an open esbuild feature request, not
-  shipped behavior, confirmed by testing directly.
-- The Text tab offers a live side-by-side comparison (site font vs.
-  Atkinson Hyperlegible Next) via radio buttons showing real rendered
-  sample text, rather than a checkbox asking the user to trust a label.
-- PrefKeeper's own panel chrome also uses Atkinson Hyperlegible Next —
-  "eating your own dog food" as an accessibility tool.
-- Font choice stays at exactly two options (site font vs. Atkinson) for
-  now; a curated multi-font list is deferred until real user feedback
-  indicates it's wanted.
-
-## Technical implementation notes
-
-- **Vertical range sliders** use `writing-mode: vertical-lr` +
-  `direction: rtl` + `appearance: none` with fully custom
-  `::-webkit-slider-runnable-track` / `::-webkit-slider-thumb` (and Moz
-  equivalents), rather than the non-standard
-  `-webkit-appearance: slider-vertical` (which paints a native
-  `accent-color` fill over any custom track background). Sliders grow
-  to fill whatever height is actually available (`flex: 1`, sane
-  min/max floor and ceiling) rather than a fixed `vh`/`px` formula —
-  this also fixed a real bug where `align-items: flex-start` was
-  silently preventing slider groups from stretching to fill their row.
-- **Cross-tab live preview:** every tab's preview reflects the full
-  combined working state (all four categories), not just its own
-  category — if someone changes colors because they couldn't read the
-  default scheme, every other tab needs to be readable too, not just
-  the one they're currently on.
-- **Known caveat, not yet tested:** cross-browser behavior of the
-  vertical-slider technique in Firefox and Safari — only verified in a
-  Chromium-based environment so far.
-
-## Publishing / packaging
-
-- **`prepublishOnly: npm run build`** guarantees a real `npm publish`
-  always ships a freshly-built `dist/`/`assets/`, never a stale build
-  from an earlier session. Verified by deliberately corrupting a build
-  output file and confirming the dry-run publish silently rebuilt it
-  clean first.
-- **`allowScripts` pre-approval for esbuild** (pinned to its exact
-  resolved version) added proactively ahead of npm v12's new
-  install-time security defaults, which make dependency
-  install/postinstall scripts opt-in rather than automatic. This
-  protects future contributors' `npm install` from silently skipping
-  esbuild's platform-binary fetch — it does NOT affect anyone who later
-  runs `npm install prefkeeper` themselves, since the published package
-  has zero runtime dependencies and no install script of its own.
-  Version-pinned by design: re-approval is needed whenever esbuild's
-  resolved version changes.
+Both this repo's own `help-source/` (used for local development and
+testing) and `help/` (this repo's own generated output) are
+gitignored, for the same reason they're meant to be gitignored in a
+consumer's project: both are fully regenerable from source, and
+tracking either would just be a second copy that can silently drift
+from what a real build actually produces — which is exactly the kind
+of staleness this project already caught once, when `templates/
+help.md` was found still using an old, no-longer-parseable directive
+syntax after the block-form syntax replaced it (see
+[`naming.md`](./naming.md)). Only `templates/help.md` (what `init`
+copies) and `examples/example.md` (a tracked, adversarial reference
+file — not consumed by any code path, purely documentation-by-example)
+are meant to ship or stay tracked.
 
 ---
 
 ## Open items (current, not historical)
 
-- [ ] Cross-browser testing of the vertical-slider technique in
-      Firefox and Safari.
-- [ ] Revisit the Focus tab's "only show outline on real `:focus`"
-      decision after more real-world testing/feedback.
-- [ ] Whether tabs need a visual indicator (e.g. a dot) showing which
-      specific tab(s) have unsaved changes, beyond the shared
-      status-block wording — never decided either way.
-- [ ] Theme sharing — deliberately deferred (see the Save as
-      Theme/My Themes section above), not an oversight.
-- [ ] Success/Warning/secondary-button/input color targets — deferred
-      to v1.5/v2, would need their own dedicated tokens (not a reuse of
-      Background/Text/Buttons/Links).
-- [ ] Typed/numeric value entry (HSL fields you can type into, as an
-      alternative to the sliders) — deferred.
-- [ ] Multiple saved profiles per device — deferred, the biggest
-      architectural lift of the remaining ideas.
-- [ ] A real React _wrapper_ package (hooks/idiomatic API) remains
-      entirely unstarted. `examples/react/` (a copy-paste demo folder)
-      is done — that's a different, much smaller thing than this.
-- [ ] The browser extension remains entirely unstarted — a separate
-      future project, not part of the v1 core module.
+- [ ] `sidebar` and `hamburger` build types — neither started. Each
+      will likely need a `src/parse.js` change (page order, page
+      titles) before the builder itself can be written.
+- [ ] A real plugin API for third-party build types — deliberately not
+      designed yet; revisit once `sidebar` exists to design the
+      contract against.
+- [ ] Static JS asset delivery (`<script src="...">` writing a real
+      file into `help/`, rather than always inlining) — worth
+      revisiting if a builder's script grows large enough to want
+      browser caching or its own lint/test tooling as a standalone
+      file.
+- [ ] Cross-process coverage merging, so `build.js`'s CLI entry block
+      stops showing as uncovered in `npm run test:coverage` despite
+      being functionally tested via `spawnSync` in `test/cli.test.js`
+      — judged not worth the setup cost right now.
+- [ ] A handful of minor branch-coverage gaps (`markdown.js`,
+      `paths.js`, a couple of edge branches in `parse.js`) explicitly
+      deferred rather than chased to 100% — reasonable open-source
+      ticket material, not release blockers.
+- [ ] Real `npm publish` — currently blocked by `private: true` on
+      purpose; also worth deciding the org-scoped rename
+      (`@beam/helplite-builder`) before or after first publish, not
+      urgent either way (see [`naming.md`](./naming.md)).
+- [ ] HelpLite itself — the runtime package that actually consumes
+      `help/help.html`, `help/pages/*.html`, and
+      `help/fields/tooltips.json` — remains a separate, not-yet-built
+      project.

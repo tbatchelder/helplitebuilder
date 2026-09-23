@@ -2,8 +2,11 @@
   "name": "helplite-builder",
   "version": "0.1.0",
   "description": "Compiles a single modified-markdown source file into the global help, page-context, and tooltip assets HelpLite consumes.",
-  "private": true,
+  "private": false,
   "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "helplite-builder": "bin/helplite-builder.js"
   },
